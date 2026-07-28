@@ -471,6 +471,89 @@ def test_get_core_meta_latest_uses_npm_latest_and_caches_by_resolved_version(tmp
     )
 
 
+def test_get_core_meta_defaults_to_latest_when_not_installed(tmp_path, monkeypatch):
+    """With no explicit version and no installed core-meta, the npm "latest" dist-tag is used."""
+    ext_path = tmp_path / "ext"
+    ext_path.mkdir()
+    (ext_path / "node_modules").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    tarball_content = b'{"devDependencies": {}}'
+    tarball_bytes = _make_core_package_tarball(tarball_content)
+    tarball_url = f"{core_path.JPBLD_NPM_URL}/@jupyterlab/core-meta/-/core-meta-4.5.7.tgz"
+    registry_meta = json.dumps({"dist": {"tarball": tarball_url}}).encode()
+
+    calls = []
+
+    def fake_urlopen(req_or_url, **_kwargs):
+        url = getattr(req_or_url, "full_url", req_or_url)
+        calls.append(url)
+        if url == f"{core_path.JPBLD_NPM_URL}/@jupyterlab/core-meta/latest":
+            return io.BytesIO(json.dumps({"version": "4.5.7"}).encode())
+        if url == f"{core_path.JPBLD_NPM_URL}/@jupyterlab/core-meta/4.5.7":
+            return io.BytesIO(registry_meta)
+        if url == tarball_url:
+            return io.BytesIO(tarball_bytes)
+        msg = f"Unexpected URL {url}"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(core_path.urllib.request, "urlopen", fake_urlopen)
+
+    location = core_path.get_core_meta(ext_path=ext_path)
+
+    assert calls == [
+        f"{core_path.JPBLD_NPM_URL}/@jupyterlab/core-meta/latest",
+        f"{core_path.JPBLD_NPM_URL}/@jupyterlab/core-meta/4.5.7",
+        tarball_url,
+    ]
+    assert location == str(
+        tmp_path / ".cache" / "jupyterlab_builder" / "core" / "4.5.7" / "core.package.json",
+    )
+
+
+def test_get_core_meta_latest_falls_back_to_github_when_npm_unreachable(tmp_path, monkeypatch):
+    """If npm is unreachable, "latest" is resolved to the newest GitHub release tag."""
+    ext_path = tmp_path / "ext"
+    ext_path.mkdir()
+    (ext_path / "node_modules").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    github_url = (
+        "https://raw.githubusercontent.com/"
+        "jupyterlab/jupyterlab/v4.5.7/"
+        "jupyterlab/staging/package.json"
+    )
+    latest_release = json.dumps({"tag_name": "v4.5.7"}).encode()
+
+    calls = []
+
+    def fake_urlopen(req_or_url, **_kwargs):
+        url = getattr(req_or_url, "full_url", req_or_url)
+        calls.append(url)
+        if url == f"{core_path.JPBLD_NPM_URL}/@jupyterlab/core-meta/latest":
+            msg = "Not Found"
+            raise urllib.error.URLError(msg)
+        if url == core_path._GITHUB_LATEST_RELEASE_API_URL:
+            return io.BytesIO(latest_release)
+        if url == github_url:
+            return io.BytesIO(b'{"dependencies": {}}')
+        msg = f"Unexpected URL {url}"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(core_path.urllib.request, "urlopen", fake_urlopen)
+
+    location = core_path.get_core_meta(ext_path=ext_path)
+
+    assert calls == [
+        f"{core_path.JPBLD_NPM_URL}/@jupyterlab/core-meta/latest",
+        core_path._GITHUB_LATEST_RELEASE_API_URL,
+        github_url,
+    ]
+    assert location == str(
+        tmp_path / ".cache" / "jupyterlab_builder" / "core" / "4.5.7" / "core.package.json",
+    )
+
+
 def test_ensure_builder_with_jupyter_builder(tmp_path):
     ext_path = tmp_path / "ext"
     core_path_dir = tmp_path / "core-meta"

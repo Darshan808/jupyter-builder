@@ -21,6 +21,11 @@ _MAX_CORE_META_BYTES = 5 * 1024 * 1024  # 5 MB — generous upper bound for core
 #: GitHub API endpoint used to resolve wildcard versions to concrete release tags
 _GITHUB_TAGS_API_URL = "https://api.github.com/repos/jupyterlab/jupyterlab/tags"
 
+#: GitHub API endpoint used to resolve "latest" to the newest stable release
+_GITHUB_LATEST_RELEASE_API_URL = (
+    "https://api.github.com/repos/jupyterlab/jupyterlab/releases/latest"
+)
+
 #: Upper bound on tag-list pages fetched when resolving a wildcard (100 tags per page)
 _MAX_GITHUB_TAG_PAGES = 10
 
@@ -61,7 +66,7 @@ def get_core_meta(
                     "add @jupyter/builder as a devDependency instead of "
                     "@jupyterlab/builder.\n \033[0m",
                 )
-        requested_version = "main"
+        requested_version = "latest"
     else:
         # Accept both "vX.Y.Z" and "X.Y.Z" for an explicitly requested version.
         requested_version = _normalize_version(requested_version)
@@ -82,13 +87,7 @@ def get_core_meta(
         return str(npm_cache_file)
     except urllib.error.URLError as npm_error:
         try:
-            # Wildcards (e.g. "4.5.x") have no single git ref, so resolve them
-            # to a concrete tag from the GitHub tag list before downloading.
-            github_version = (
-                _resolve_wildcard_github_version(requested_version)
-                if _is_wildcard_version(requested_version)
-                else requested_version
-            )
+            github_version = _resolve_github_version(requested_version)
             github_cache_file = cache_root / github_version / "core.package.json"
             if github_cache_file.exists():
                 return str(github_cache_file)
@@ -189,6 +188,35 @@ def _semver_key(v: str) -> tuple[tuple[int, ...], int, tuple[int, ...]]:
     # order by the numeric identifiers (e.g. alpha.3 < alpha.4).
     pre_numeric = tuple(int(p) for p in prerelease.split(".") if p.isdigit())
     return (numeric, 0 if prerelease else 1, pre_numeric)
+
+
+def _resolve_github_version(version: str) -> str:
+    """Resolve an abstract version specifier to a concrete jupyterlab/jupyterlab git ref.
+
+    "latest" and wildcards (e.g. "4.5.x") have no single git ref, so they are resolved
+    to a concrete tag from the GitHub tag list. Anything else is returned as-is.
+    """
+    if version == "latest":
+        return _resolve_latest_github_version()
+    if _is_wildcard_version(version):
+        return _resolve_wildcard_github_version(version)
+    return version
+
+
+def _resolve_latest_github_version() -> str:
+    """Resolve the latest stable jupyterlab/jupyterlab release tag from GitHub.
+
+    Used as a fallback when npm cannot be reached to resolve the "latest" dist-tag.
+    GitHub's "latest release" already excludes prereleases and drafts, mirroring
+    npm's "latest" semantics.
+    """
+    data = _http_get(_GITHUB_LATEST_RELEASE_API_URL)
+    release = json.loads(data)
+    tag_name = release.get("tag_name") if isinstance(release, dict) else None
+    if not isinstance(tag_name, str) or not tag_name:
+        msg = "Failed to resolve latest jupyterlab/jupyterlab release from GitHub"
+        raise urllib.error.URLError(msg)
+    return _normalize_version(tag_name)
 
 
 def _resolve_wildcard_github_version(version: str) -> str:
