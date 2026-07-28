@@ -12,6 +12,8 @@ import subprocess
 import tarfile
 import urllib.error
 import urllib.request
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as installed_version
 from pathlib import Path
 
 from .constants import JPBLD_NPM_URL, JPBLD_RAW_GITHUB_URL
@@ -28,6 +30,9 @@ _GITHUB_LATEST_RELEASE_API_URL = (
 
 #: Upper bound on tag-list pages fetched when resolving a wildcard (100 tags per page)
 _MAX_GITHUB_TAG_PAGES = 10
+
+#: Pre-migration marker package.
+_LEGACY_BUILDER_MARKER = "@jupyterlab/builder"
 
 
 def _home_dir() -> Path:
@@ -53,23 +58,16 @@ def get_core_meta(
     logger: logging.Logger | None = None,
 ) -> str:
     """Return the path to the core package JSON, downloading it if needed."""
-    requested_version = version
-    if requested_version is None:
-        if ext_path is not None:
-            installed_core_meta = _get_installed_core_meta(Path(ext_path).resolve())
-            if installed_core_meta is not None:
-                return installed_core_meta
-            if logger:
-                logger.warning(
-                    "\033[33m@jupyterlab/core-meta was not found in node_modules, "
-                    "so a network download will be used as a fallback. To avoid this, "
-                    "add @jupyter/builder as a devDependency instead of "
-                    "@jupyterlab/builder.\n \033[0m",
-                )
-        requested_version = "latest"
-    else:
+    if version is not None:
         # Accept both "vX.Y.Z" and "X.Y.Z" for an explicitly requested version.
-        requested_version = _normalize_version(requested_version)
+        requested_version = _normalize_version(version)
+        used_fallback_resolution = False
+    else:
+        installed_core_meta, requested_version, used_fallback_resolution = (
+            _resolve_version_without_installed_core_meta(ext_path, logger)
+        )
+        if installed_core_meta is not None:
+            return installed_core_meta
 
     cache_root = _home_dir() / ".cache" / "jupyterlab_builder" / "core"
     cached_file = _get_cached_core_meta_file(cache_root, requested_version)
@@ -80,6 +78,7 @@ def get_core_meta(
     # requested version cannot be found in either source, raise an error.
     try:
         npm_version = _resolve_npm_version(requested_version)
+        _check_matches_installed_jupyterlab(npm_version, used_fallback_resolution, logger)
         npm_cache_file = cache_root / npm_version / "core.package.json"
         if npm_cache_file.exists():
             return str(npm_cache_file)
@@ -88,6 +87,7 @@ def get_core_meta(
     except urllib.error.URLError as npm_error:
         try:
             github_version = _resolve_github_version(requested_version)
+            _check_matches_installed_jupyterlab(github_version, used_fallback_resolution, logger)
             github_cache_file = cache_root / github_version / "core.package.json"
             if github_cache_file.exists():
                 return str(github_cache_file)
@@ -104,9 +104,100 @@ def get_core_meta(
         return str(github_cache_file)
 
 
+def _resolve_version_without_installed_core_meta(
+    ext_path: str | os.PathLike[str] | None,
+    logger: logging.Logger | None,
+) -> tuple[str | None, str, bool]:
+    """Resolve a version when no explicit `version` was given.
+
+    Returns `(installed_core_meta_path, requested_version, used_fallback_resolution)`.
+    If `installed_core_meta_path` is not None, the caller should return it directly and
+    ignore the other two values.
+    """
+    if ext_path is None:
+        return None, "latest", True
+
+    resolved_ext_path = Path(ext_path).resolve()
+    installed_core_meta = _get_installed_core_meta(resolved_ext_path)
+    if installed_core_meta is not None:
+        return installed_core_meta, "", False
+
+    legacy_version = _legacy_builder_marker_version(resolved_ext_path)
+    if legacy_version is not None:
+        if logger:
+            logger.warning(
+                "\033[33m@jupyterlab/core-meta was not found in node_modules. This "
+                "extension declares a devDependency on %s@%s, which is a legacy package "
+                "so core-meta %s will be used instead of the latest release. "
+                " To avoid this, add @jupyter/builder as a devDependency instead "
+                "of %s.\n \033[0m",
+                _LEGACY_BUILDER_MARKER,
+                legacy_version,
+                legacy_version,
+                _LEGACY_BUILDER_MARKER,
+            )
+        return None, _normalize_version(legacy_version), False
+
+    if logger:
+        logger.warning(
+            "\033[33m@jupyterlab/core-meta was not found in node_modules, "
+            "so a network download will be used as a fallback. To avoid this, "
+            "add @jupyter/builder as a devDependency instead of "
+            "@jupyterlab/builder.\n \033[0m",
+        )
+    return None, "latest", True
+
+
+def _legacy_builder_marker_version(ext_path: Path) -> str | None:
+    """Return the extension's own pinned `@jupyterlab/builder` version, if declared.
+
+    Returns None if the marker isn't declared, the version is a local path/workspace
+    spec rather than a real version, or `package.json` can't be read.
+    """
+    try:
+        with (ext_path / "package.json").open() as fid:
+            ext_data = json.load(fid)
+    except (OSError, ValueError):
+        return None
+    version_spec = ext_data.get("devDependencies", {}).get(
+        _LEGACY_BUILDER_MARKER,
+    ) or ext_data.get("dependencies", {}).get(_LEGACY_BUILDER_MARKER)
+    if not isinstance(version_spec, str) or "/" in version_spec:
+        return None
+    version = re.sub(r"^[\^~<>=\s]+", "", version_spec)
+    return version if re.match(r"\d", version) else None
+
+
 def _normalize_version(version: str) -> str:
     """Strip a leading 'v' from a numeric version so 'vX.Y.Z' and 'X.Y.Z' are equivalent."""
     return version[1:] if re.match(r"v\d", version) else version
+
+
+def _major_minor(version: str) -> str | None:
+    match = re.match(r"\d+\.\d+", version)
+    return match.group(0) if match else None
+
+
+def _check_matches_installed_jupyterlab(
+    core_meta_version: str,
+    used_fallback_resolution: bool,
+    logger: logging.Logger | None = None,
+) -> None:
+    """Fail fast if a fallback-resolved core-meta version doesn't match installed jupyterlab."""
+    if not used_fallback_resolution:
+        return
+    try:
+        jupyterlab_version = installed_version("jupyterlab")
+    except PackageNotFoundError:
+        return
+    if _major_minor(core_meta_version) != _major_minor(jupyterlab_version):
+        msg = (
+            f"building against {core_meta_version} metadata but jupyterlab "
+            f"{jupyterlab_version} is installed"
+        )
+        if logger:
+            logger.error("\033[31m%s\n \033[0m", msg)
+        raise RuntimeError(msg)
 
 
 def _github_ref(version: str) -> str:
