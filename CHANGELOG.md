@@ -2,6 +2,32 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## 1.2.0
+
+([Full Changelog](https://github.com/jupyterlab/jupyter-builder/compare/v1.1.1...d758a97ca92f056747e57d5b419a70fecc6c6870))
+
+### Bugs fixed
+
+- Switch back to Module Federation v1 [#155](https://github.com/jupyterlab/jupyter-builder/pull/155) ([@krassowski](https://github.com/krassowski), [@dlqqq](https://github.com/dlqqq), [@jtpio](https://github.com/jtpio))
+- Improve fallback resolution [#153](https://github.com/jupyterlab/jupyter-builder/pull/153) ([@Darshan808](https://github.com/Darshan808), [@krassowski](https://github.com/krassowski))
+
+### Maintenance and upkeep improvements
+
+- Fix flaky `test_builder_version_mismatch` [#151](https://github.com/jupyterlab/jupyter-builder/pull/151) ([@Darshan808](https://github.com/Darshan808), [@krassowski](https://github.com/krassowski))
+- Add deptry to CI to catch missing/transitive dependencies [#150](https://github.com/jupyterlab/jupyter-builder/pull/150) ([@Darshan808](https://github.com/Darshan808), [@krassowski](https://github.com/krassowski))
+- Improve Coverage Accuracy and Speed Up Tests [#144](https://github.com/jupyterlab/jupyter-builder/pull/144) ([@Darshan808](https://github.com/Darshan808), [@Copilot](https://github.com/Copilot), [@krassowski](https://github.com/krassowski))
+
+### Contributors to this release
+
+The following people contributed discussions, new ideas, code and documentation contributions, and review.
+See [our definition of contributors](https://github-activity.readthedocs.io/en/latest/use/#how-does-this-tool-define-contributions-in-the-reports).
+
+([GitHub contributors page for this release](https://github.com/jupyterlab/jupyter-builder/graphs/contributors?from=2026-07-17&to=2026-07-30&type=c))
+
+@Copilot ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3ACopilot+updated%3A2026-07-17..2026-07-30&type=Issues)) | @Darshan808 ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3ADarshan808+updated%3A2026-07-17..2026-07-30&type=Issues)) | @dlqqq ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3Adlqqq+updated%3A2026-07-17..2026-07-30&type=Issues)) | @jtpio ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3Ajtpio+updated%3A2026-07-17..2026-07-30&type=Issues)) | @krassowski ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3Akrassowski+updated%3A2026-07-17..2026-07-30&type=Issues))
+
+<!-- <END NEW CHANGELOG ENTRY> -->
+
 ## 1.1.1
 
 ([Full Changelog](https://github.com/jupyterlab/jupyter-builder/compare/v1.1.0...778b3b2e02f3534c767c4b1319e4eb27f5d5bd37))
@@ -19,8 +45,6 @@ See [our definition of contributors](https://github-activity.readthedocs.io/en/l
 ([GitHub contributors page for this release](https://github.com/jupyterlab/jupyter-builder/graphs/contributors?from=2026-07-11&to=2026-07-17&type=c))
 
 @bollwyvl ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3Abollwyvl+updated%3A2026-07-11..2026-07-17&type=Issues)) | @Darshan808 ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3ADarshan808+updated%3A2026-07-11..2026-07-17&type=Issues)) | @jtpio ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3Ajtpio+updated%3A2026-07-11..2026-07-17&type=Issues)) | @krassowski ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3Akrassowski+updated%3A2026-07-11..2026-07-17&type=Issues))
-
-<!-- <END NEW CHANGELOG ENTRY> -->
 
 ## 1.1.0
 
