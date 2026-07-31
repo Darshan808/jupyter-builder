@@ -97,6 +97,11 @@
       "$ref": "#/definitions/relativePath",
       "default": null
     },
+    "moduleFederationVersion": {
+      "title": "Module Federation runtime version",
+      "description": "The Module Federation runtime version to build with. Defaults to 1, the webpack-compatible runtime, which warns and uses the host's version when a shared package falls outside requiredVersion. Version 2 is opt-in: its runtime instead fails hard for shared packages that are not singletons and have no bundled fallback (e.g. @jupyterlab/docregistry), which breaks loading across JupyterLab minor versions. See https://github.com/module-federation/core/issues/4651. Overridden by the --module-federation-version CLI flag.",
+      "enum": [1, 2]
+    },
     "sharedPackages": {
       "description": "Modules that should be shared in the share scope. When provided, property names are used to match requested modules in this compilation.",
       "ref": "#/definitions/sharedObject"
