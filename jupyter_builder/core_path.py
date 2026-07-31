@@ -34,6 +34,10 @@ _MAX_GITHUB_TAG_PAGES = 10
 #: Pre-migration marker package.
 _LEGACY_BUILDER_MARKER = "@jupyterlab/builder"
 
+#: A version specifier built only from numeric and wildcard components, e.g. "4",
+#: "4.5", "4.x" or "4.5.*". These are npm ranges rather than concrete versions.
+_NUMERIC_OR_WILDCARD_SPEC = re.compile(r"[\dxX*]+(?:\.[\dxX*]+)*")
+
 
 def _home_dir() -> Path:
     home = os.environ.get("HOME")
@@ -59,8 +63,9 @@ def get_core_meta(
 ) -> str:
     """Return the path to the core package JSON, downloading it if needed."""
     if version is not None:
-        # Accept both "vX.Y.Z" and "X.Y.Z" for an explicitly requested version.
-        requested_version = _normalize_version(version)
+        # Accept both "vX.Y.Z" and "X.Y.Z" for an explicitly requested version, as
+        # well as partial specifiers such as "4" or "4.5".
+        requested_version = _expand_partial_version(_normalize_version(version))
         used_fallback_resolution = False
     else:
         installed_core_meta, requested_version, used_fallback_resolution = (
@@ -136,7 +141,7 @@ def _resolve_version_without_installed_core_meta(
                 legacy_version,
                 _LEGACY_BUILDER_MARKER,
             )
-        return None, _normalize_version(legacy_version), False
+        return None, _expand_partial_version(_normalize_version(legacy_version)), False
 
     if logger:
         logger.warning(
@@ -171,6 +176,31 @@ def _legacy_builder_marker_version(ext_path: Path) -> str | None:
 def _normalize_version(version: str) -> str:
     """Strip a leading 'v' from a numeric version so 'vX.Y.Z' and 'X.Y.Z' are equivalent."""
     return version[1:] if re.match(r"v\d", version) else version
+
+
+def _expand_partial_version(version: str) -> str:
+    """Expand a partial npm version specifier into an explicit wildcard range.
+
+    npm treats an omitted trailing component as a wildcard, so "4" means 4.x.x and
+    "4.5" means 4.5.x. Such a specifier is not a concrete version, so neither the npm
+    registry nor a jupyterlab/jupyterlab git tag can be looked up with it directly;
+    expanding it to the wildcard form lets the range resolvers pick the highest
+    matching release instead. A bare wildcard ("*", "x") means "any version" and is
+    mapped to "latest". Concrete versions ("4.5.7", "4.6.0-alpha.4") and non-numeric
+    specifiers ("latest", "main") are returned unchanged.
+    """
+    if not _NUMERIC_OR_WILDCARD_SPEC.fullmatch(version):
+        return version
+    parts = ["x" if part in {"x", "X", "*"} else part for part in version.split(".")]
+    parts.extend(["x"] * (3 - len(parts)))
+    if parts[0] == "x":
+        return "latest"
+    # Anything following a wildcard component is unconstrained too, so "4.x.7"
+    # is really 4.x.x.
+    if "x" in parts:
+        first_wildcard = parts.index("x")
+        parts[first_wildcard:] = ["x"] * (len(parts) - first_wildcard)
+    return ".".join(parts)
 
 
 def _major_minor(version: str) -> str | None:
