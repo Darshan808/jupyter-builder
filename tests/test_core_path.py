@@ -236,6 +236,36 @@ def test_normalize_version_accepts_both_forms(version):
     assert core_path._normalize_version(version) == "4.5.7"
 
 
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        # Partial specifiers are ranges over the omitted components.
+        ("4", "4.x.x"),
+        ("4.5", "4.5.x"),
+        # Partially wildcarded ranges are completed the same way.
+        ("4.x", "4.x.x"),
+        ("4.X", "4.x.x"),
+        ("4.*", "4.x.x"),
+        ("4.5.*", "4.5.x"),
+        ("4.5.X", "4.5.x"),
+        # Nothing is constrained after a wildcard component.
+        ("4.x.7", "4.x.x"),
+        # A bare wildcard means "any version".
+        ("*", "latest"),
+        ("x", "latest"),
+        # Concrete versions and non-numeric specifiers are left alone.
+        ("4.5.7", "4.5.7"),
+        ("4.5.x", "4.5.x"),
+        ("4.6.0-alpha.4", "4.6.0-alpha.4"),
+        ("latest", "latest"),
+        ("main", "main"),
+        ("some-branch", "some-branch"),
+    ],
+)
+def test_expand_partial_version(version, expected):
+    assert core_path._expand_partial_version(version) == expected
+
+
 def test_get_core_meta_falls_back_to_github_for_prerelease(tmp_path, monkeypatch):
     """An npm-style prerelease that npm lacks is fetched from the matching git tag."""
     ext_path = tmp_path / "ext"
