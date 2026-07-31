@@ -360,8 +360,7 @@ def _normalize_module_federation_version(value: str | int | None) -> str | None:
         msg = (
             f"Invalid module_federation_version {value!r}: expected 1 or 2. "
             "Version 1 (the default) is the webpack-compatible Module Federation "
-            "runtime; version 2 is experimental, see "
-            "https://github.com/module-federation/core/issues/4651"
+            "runtime; version 2 is experimental"
         )
         raise ValueError(msg)
     return normalized

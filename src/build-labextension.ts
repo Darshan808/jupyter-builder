@@ -59,8 +59,7 @@ function parseModuleFederationVersion(value: string): ModuleFederationVersion {
   if (value !== '1' && value !== '2') {
     throw new InvalidArgumentError(
       'Expected 1 or 2. Version 1 (the default) is the webpack-compatible ' +
-        'Module Federation runtime; version 2 is experimental, see ' +
-        'https://github.com/module-federation/core/issues/4651'
+        'Module Federation runtime; version 2 is experimental'
     );
   }
   return value === '1' ? 1 : 2;
