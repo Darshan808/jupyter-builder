@@ -2,6 +2,31 @@
 
 <!-- <START NEW CHANGELOG ENTRY> -->
 
+## 1.2.2
+
+([Full Changelog](https://github.com/jupyterlab/jupyter-builder/compare/v1.2.1...96bec6a7aee17b4c2e5c41d3e5edeaa0cc6b406b))
+
+### Bugs fixed
+
+- Fix path issues when building on Windows [#164](https://github.com/jupyterlab/jupyter-builder/pull/164) ([@krassowski](https://github.com/krassowski), [@Darshan808](https://github.com/Darshan808))
+
+### Other merged PRs
+
+- Bump @rspack/core from 2.1.2 to 2.1.7 [#162](https://github.com/jupyterlab/jupyter-builder/pull/162) ([@Darshan808](https://github.com/Darshan808))
+- Bump the actions group with 2 updates [#161](https://github.com/jupyterlab/jupyter-builder/pull/161) ([@Darshan808](https://github.com/Darshan808))
+- Bump ruff from 0.15.20 to 0.16.0 in the pip group [#160](https://github.com/jupyterlab/jupyter-builder/pull/160) ([@Darshan808](https://github.com/Darshan808))
+
+### Contributors to this release
+
+The following people contributed discussions, new ideas, code and documentation contributions, and review.
+See [our definition of contributors](https://github-activity.readthedocs.io/en/latest/use/#how-does-this-tool-define-contributions-in-the-reports).
+
+([GitHub contributors page for this release](https://github.com/jupyterlab/jupyter-builder/graphs/contributors?from=2026-07-31&to=2026-08-06&type=c))
+
+@Darshan808 ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3ADarshan808+updated%3A2026-07-31..2026-08-06&type=Issues)) | @krassowski ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3Akrassowski+updated%3A2026-07-31..2026-08-06&type=Issues))
+
+<!-- <END NEW CHANGELOG ENTRY> -->
+
 ## 1.2.1
 
 ([Full Changelog](https://github.com/jupyterlab/jupyter-builder/compare/v1.2.0...23227033b9c1715da1bb201d97d4f04d97778688))
@@ -18,8 +43,6 @@ See [our definition of contributors](https://github-activity.readthedocs.io/en/l
 ([GitHub contributors page for this release](https://github.com/jupyterlab/jupyter-builder/graphs/contributors?from=2026-07-30&to=2026-07-31&type=c))
 
 @Darshan808 ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3ADarshan808+updated%3A2026-07-30..2026-07-31&type=Issues)) | @krassowski ([activity](https://github.com/search?q=repo%3Ajupyterlab%2Fjupyter-builder+involves%3Akrassowski+updated%3A2026-07-30..2026-07-31&type=Issues))
-
-<!-- <END NEW CHANGELOG ENTRY> -->
 
 ## 1.2.0
 
