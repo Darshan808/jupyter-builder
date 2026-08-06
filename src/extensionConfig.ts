@@ -191,7 +191,16 @@ function generateConfig({
 
         // Clear out any remoteEntry files that are stale
         // https://stackoverflow.com/a/40370750
-        const files = glob.sync(path.join(staticPath, 'remoteEntry.*.js'));
+        // The directory is passed as `cwd` instead of being joined into the
+        // pattern: glob reads a pattern as glob syntax, so on Windows the
+        // separators of a joined path are taken as escape characters and match
+        // nothing. The same applies on any platform to a directory whose name
+        // contains `[`, `{` or an extglob prefix such as `@(`, which make the
+        // pattern mean something other than the literal directory name.
+        const files = glob.sync('remoteEntry.*.js', {
+          cwd: staticPath,
+          absolute: true
+        });
         let newEntry = '';
         const unlinked: string[] = [];
         files.forEach(file => {
@@ -207,6 +216,21 @@ function generateConfig({
           console.log('Removed old assets: ', unlinked);
         }
 
+        if (!newEntry) {
+          // Without this guard `path.posix.join('static', newEntry)` below
+          // would record `"load": "static"`, JupyterLab would request the
+          // directory itself, and the extension would fail to load with no
+          // signal at build time - the symptom reported in
+          // https://github.com/jupyterlab/jupyter-builder/issues/163.
+          stats.compilation.errors.push(
+            new Error(
+              `No remoteEntry.*.js was found in ${staticPath}, so the extension ` +
+                'entry point cannot be recorded in jupyterlab._build.load.'
+            )
+          );
+          return;
+        }
+
         // Find the remoteEntry file and add it to the package.json metadata
         const data = fs.readJSONSync(path.join(outputPath, 'package.json'));
         const _build: {
@@ -215,7 +239,10 @@ function generateConfig({
           mimeExtension?: string;
           style?: string;
         } = {
-          load: path.join('static', newEntry)
+          // Joined with the posix separator because JupyterLab interpolates
+          // this straight into the URL it fetches the entry point from, and an
+          // extension may be built on one platform and installed on another.
+          load: path.posix.join('static', newEntry)
         };
         if (exposes['./extension'] !== undefined) {
           _build.extension = './extension';
