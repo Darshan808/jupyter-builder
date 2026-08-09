@@ -64,8 +64,10 @@ def get_core_meta(
     """Return the path to the core package JSON, downloading it if needed."""
     if version is not None:
         # Accept both "vX.Y.Z" and "X.Y.Z" for an explicitly requested version, as
-        # well as partial specifiers such as "4" or "4.5".
-        requested_version = _expand_partial_version(_normalize_version(version))
+        # well as npm range specifiers such as "4", "4.5" or "^4.3.6 || ^3.6.8".
+        requested_version = _expand_partial_version(
+            _range_lower_bound(version) or _normalize_version(version),
+        )
         used_fallback_resolution = False
     else:
         installed_core_meta, requested_version, used_fallback_resolution = (
@@ -141,7 +143,7 @@ def _resolve_version_without_installed_core_meta(
                 legacy_version,
                 _LEGACY_BUILDER_MARKER,
             )
-        return None, _expand_partial_version(_normalize_version(legacy_version)), False
+        return None, _expand_partial_version(legacy_version), False
 
     if logger:
         logger.warning(
@@ -169,13 +171,47 @@ def _legacy_builder_marker_version(ext_path: Path) -> str | None:
     ) or ext_data.get("dependencies", {}).get(_LEGACY_BUILDER_MARKER)
     if not isinstance(version_spec, str) or "/" in version_spec:
         return None
-    version = re.sub(r"^[\^~<>=\s]+", "", version_spec)
-    return version if re.match(r"\d", version) else None
+    return _range_lower_bound(version_spec)
 
 
 def _normalize_version(version: str) -> str:
     """Strip a leading 'v' from a numeric version so 'vX.Y.Z' and 'X.Y.Z' are equivalent."""
     return version[1:] if re.match(r"v\d", version) else version
+
+
+def _range_lower_bound(spec: str) -> str | None:
+    """Reduce an npm version range to the single version it should be resolved against.
+
+    npm ranges can name more than one version: a union ("^4.3.6 || ^3.6.8"), a compound
+    range (">=4.3.6 <5.0.0") or a hyphen range ("4.1.0 - 4.5.0"). None of those can be
+    fetched from the registry or a git tag, so the highest alternative is selected — a
+    build should target the newest JupyterLab the extension claims to support — and
+    reduced to the version it pins at its lower bound, exactly as a lone "^4.5.7" is
+    already treated as 4.5.7.
+
+    Returns None when the specifier names no version at all, e.g. "latest", a branch
+    name, or "workspace:*".
+    """
+    candidates = [
+        version
+        for alternative in spec.split("||")
+        if (version := _alternative_lower_bound(alternative))
+    ]
+    return max(candidates, key=_semver_key) if candidates else None
+
+
+def _alternative_lower_bound(alternative: str) -> str | None:
+    """Return the version a single (union-free) npm range pins at its lower bound.
+
+    The leading token is the lower bound for every range form npm accepts — '^4.3.6',
+    '>=4.3.6 <5.0.0' and '4.1.0 - 4.5.0' all start at the version they allow least of.
+    Returns None if the alternative contains no version-like token.
+    """
+    for token in alternative.split():
+        version = _normalize_version(re.sub(r"^[\^~<>=\s]+", "", token))
+        if re.match(r"\d", version):
+            return version
+    return None
 
 
 def _expand_partial_version(version: str) -> str:
