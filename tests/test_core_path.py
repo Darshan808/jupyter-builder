@@ -266,6 +266,31 @@ def test_expand_partial_version(version, expected):
     assert core_path._expand_partial_version(version) == expected
 
 
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        # A union targets the newest JupyterLab the extension supports.
+        ("^4.3.6 || ^3.6.8", "4.3.6"),
+        ("^3 || ^4", "4"),
+        ("^4.5 || ^4.4.2", "4.5"),
+        # Prereleases lose to the stable release of the same version.
+        ("^4.6.0-alpha.4 || ^4.6.0", "4.6.0"),
+        # Numeric, not lexical, ordering across alternatives.
+        ("^4.9.0 || ^4.10.0", "4.10.0"),
+        # A single range is unchanged from before.
+        ("^4.5.7", "4.5.7"),
+        (">=v4.5.7", "4.5.7"),
+        ("4.5.x", "4.5.x"),
+        # Specifiers that name no version at all.
+        ("latest", None),
+        ("main", None),
+        ("*", None),
+    ],
+)
+def test_range_lower_bound(spec, expected):
+    assert core_path._range_lower_bound(spec) == expected
+
+
 def test_get_core_meta_falls_back_to_github_for_prerelease(tmp_path, monkeypatch):
     """An npm-style prerelease that npm lacks is fetched from the matching git tag."""
     ext_path = tmp_path / "ext"
@@ -795,8 +820,16 @@ def test_get_core_meta_ignores_legacy_builder_marker_workspace_spec(tmp_path, mo
         ("^4.5.7", "4.5.7"),
         ("~4.5.7", "4.5.7"),
         (">=4.5.7", "4.5.7"),
+        # A union resolves to its highest alternative, whichever side it is on.
+        ("^4.3.6 || ^3.6.8", "4.3.6"),
+        ("^3.6.8 || ^4.3.6", "4.3.6"),
+        ("^3.6.8 || ^4.3.6 || ^5.0.0", "5.0.0"),
+        # Compound and hyphen ranges reduce to their lower bound.
+        (">=4.3.6 <5.0.0", "4.3.6"),
+        ("4.1.0 - 4.5.0", "4.1.0"),
         ("file:../builder", None),
         ("workspace:*", None),
+        ("*", None),
     ],
 )
 def test_legacy_builder_marker_version_parses_spec(tmp_path, version_spec, expected):
