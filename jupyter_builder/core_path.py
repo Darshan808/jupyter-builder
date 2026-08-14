@@ -134,12 +134,11 @@ def _resolve_version_without_installed_core_meta(
         if logger:
             logger.warning(
                 "\033[33m@jupyterlab/core-meta was not found in node_modules. This "
-                "extension declares a devDependency on %s@%s, which is a legacy package "
+                "extension declares a devDependency on %s, which is a legacy package, "
                 "so core-meta %s will be used instead of the latest release. "
                 " To avoid this, add @jupyter/builder as a devDependency instead "
                 "of %s.\n \033[0m",
                 _LEGACY_BUILDER_MARKER,
-                legacy_version,
                 legacy_version,
                 _LEGACY_BUILDER_MARKER,
             )
@@ -186,31 +185,43 @@ def _range_lower_bound(spec: str) -> str | None:
     range (">=4.3.6 <5.0.0") or a hyphen range ("4.1.0 - 4.5.0"). None of those can be
     fetched from the registry or a git tag, so the highest alternative is selected — a
     build should target the newest JupyterLab the extension claims to support — and
-    reduced to the version it pins at its lower bound, exactly as a lone "^4.5.7" is
-    already treated as 4.5.7.
+    reduced to a single requestable version by `_alternative_bounds`.
 
     Returns None when the specifier names no version at all, e.g. "latest", a branch
     name, or "workspace:*".
     """
     candidates = [
-        version
-        for alternative in spec.split("||")
-        if (version := _alternative_lower_bound(alternative))
+        bounds for alternative in spec.split("||") if (bounds := _alternative_bounds(alternative))
     ]
-    return max(candidates, key=_semver_key) if candidates else None
+    if not candidates:
+        return None
+    # Alternatives are ranked by the version each one starts at, but it is the
+    # requestable form of the winning alternative that gets resolved.
+    _, requested_version = max(candidates, key=lambda bounds: _semver_key(bounds[0]))
+    return requested_version
 
 
-def _alternative_lower_bound(alternative: str) -> str | None:
-    """Return the version a single (union-free) npm range pins at its lower bound.
+def _alternative_bounds(alternative: str) -> tuple[str, str] | None:
+    """Return `(lower_bound, requested_version)` for one union-free npm range.
 
-    The leading token is the lower bound for every range form npm accepts — '^4.3.6',
-    '>=4.3.6 <5.0.0' and '4.1.0 - 4.5.0' all start at the version they allow least of.
-    Returns None if the alternative contains no version-like token.
+    The leading token is the lower bound for every range form npm accepts — "^4.5.7",
+    ">=4.5.7 <5.0.0" and "4.1.0 - 4.5.0" all start at the version they allow least of.
+    That bound is what alternatives are ranked against each other by.
+
+    The version actually requested differs from it only for a caret, which admits every
+    later patch release: "^4.5.7" is requested as "4.5.x". Both the npm registry and the
+    git tag list resolve a wildcard to its highest match, so the caret selects the newest
+    patch it allows behaving like the ">=4.5.7".
+
+    Returns None if the alternative holds no version-like token.
     """
     for token in alternative.split():
         version = _normalize_version(re.sub(r"^[\^~<>=\s]+", "", token))
-        if re.match(r"\d", version):
-            return version
+        if not re.match(r"\d", version):
+            continue
+        if token.startswith("^"):
+            return version, re.sub(r"^(\d+\.\d+)\.\d+.*$", r"\1.x", version)
+        return version, version
     return None
 
 
