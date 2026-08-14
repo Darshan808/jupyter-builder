@@ -134,11 +134,12 @@ def _resolve_version_without_installed_core_meta(
         if logger:
             logger.warning(
                 "\033[33m@jupyterlab/core-meta was not found in node_modules. This "
-                "extension declares a devDependency on %s, which is a legacy package, "
+                "extension declares a devDependency on %s@%s, which is a legacy package "
                 "so core-meta %s will be used instead of the latest release. "
                 " To avoid this, add @jupyter/builder as a devDependency instead "
                 "of %s.\n \033[0m",
                 _LEGACY_BUILDER_MARKER,
+                legacy_version,
                 legacy_version,
                 _LEGACY_BUILDER_MARKER,
             )
