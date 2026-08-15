@@ -350,13 +350,24 @@ def _resolve_wildcard_npm_version(version: str) -> str:
     return max(matching, key=_semver_key)
 
 
-def _semver_key(v: str) -> tuple[tuple[int, ...], int, tuple[int, ...]]:
+def _semver_key(v: str) -> tuple[tuple[int, ...], int, tuple[tuple[int, int, str], ...]]:
     release, _, prerelease = v.partition("-")
     numeric = tuple(int(p) for p in release.split(".") if p.isdigit())
-    # Stable releases sort higher than pre-releases; within pre-releases,
-    # order by the numeric identifiers (e.g. alpha.3 < alpha.4).
-    pre_numeric = tuple(int(p) for p in prerelease.split(".") if p.isdigit())
-    return (numeric, 0 if prerelease else 1, pre_numeric)
+    # Stable releases sort higher than pre-releases of the same version.
+    return (numeric, 0 if prerelease else 1, _prerelease_key(prerelease))
+
+
+def _prerelease_key(prerelease: str) -> tuple[tuple[int, int, str], ...]:
+    """Order the dot-separated identifiers of a pre-release by semver precedence.
+
+    Each identifier becomes `(is_alphanumeric, number, text)` so that the series it
+    names is compared before the iteration within it: 'alpha.5' < 'beta.0' < 'rc.0'.
+    """
+    return tuple(
+        (0, int(identifier), "") if identifier.isdigit() else (1, 0, identifier)
+        for identifier in prerelease.split(".")
+        if identifier
+    )
 
 
 def _resolve_github_version(version: str) -> str:

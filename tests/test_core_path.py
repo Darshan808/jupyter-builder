@@ -502,6 +502,87 @@ def test_resolve_wildcard_npm_version_matches_prerelease_versions(monkeypatch):
     assert resolved == "4.6.0-alpha.5"
 
 
+def test_semver_key_orders_prerelease_series():
+    """Pre-releases rank alpha < beta < rc < stable, by series before iteration."""
+    versions = [
+        "4.6.0",
+        "4.6.0-rc.1",
+        "4.6.0-alpha.4",
+        "4.6.0-beta.1",
+        "4.6.0-rc.0",
+        "4.6.0-beta.2",
+        "4.6.0-alpha.10",
+        "4.6.0-alpha",
+    ]
+
+    assert sorted(versions, key=core_path._semver_key) == [
+        # A pre-release that is a prefix of another ranks lower.
+        "4.6.0-alpha",
+        # Numeric identifiers compare as numbers, not lexically: alpha.4 < alpha.10.
+        "4.6.0-alpha.4",
+        "4.6.0-alpha.10",
+        "4.6.0-beta.1",
+        "4.6.0-beta.2",
+        "4.6.0-rc.0",
+        "4.6.0-rc.1",
+        # The stable release outranks every pre-release of the same version.
+        "4.6.0",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("lower", "higher"),
+    [
+        ("4.6.0-alpha.5", "4.6.0-beta.0"),
+        ("4.6.0-beta.1", "4.6.0-rc.0"),
+        ("4.6.0-alpha.9", "4.6.0-rc.0"),
+        ("4.6.0-rc.2", "4.6.0"),
+        ("4.6.0", "4.6.1-alpha.0"),
+        # A numeric identifier ranks below an alphanumeric one.
+        ("4.6.0-1", "4.6.0-alpha"),
+    ],
+)
+def test_semver_key_ranks_prerelease_transitions(lower, higher):
+    assert core_path._semver_key(lower) < core_path._semver_key(higher)
+
+
+def test_resolve_wildcard_npm_version_advances_across_prerelease_series(monkeypatch):
+    """A wildcard picks the newest series, not the highest number within an older one."""
+
+    def fake_urlopen(req_or_url, **_kwargs):
+        url = getattr(req_or_url, "full_url", req_or_url)
+        assert url == f"{core_path.JPBLD_NPM_URL}/@jupyterlab/core-meta"
+        return io.BytesIO(
+            json.dumps(
+                {
+                    "versions": {
+                        "4.7.0-alpha.9": {},
+                        "4.7.0-beta.1": {},
+                        "4.7.0-rc.0": {},
+                    },
+                },
+            ).encode(),
+        )
+
+    monkeypatch.setattr(core_path.urllib.request, "urlopen", fake_urlopen)
+
+    # No stable 4.7.0 yet, so the pre-release ordering is what decides the answer.
+    assert core_path._resolve_wildcard_npm_version("4.7.x") == "4.7.0-rc.0"
+
+
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        ("~4.6.0-alpha.9 || ~4.6.0-beta.1", "4.6.0-beta.1"),
+        ("~4.6.0-beta.1 || ~4.6.0-rc.0", "4.6.0-rc.0"),
+        ("~4.6.0-rc.0 || ~4.6.0-alpha.9", "4.6.0-rc.0"),
+    ],
+)
+def test_range_lower_bound_ranks_prerelease_alternatives(spec, expected):
+    """Union alternatives are ranked with the same pre-release precedence."""
+    assert core_path._range_lower_bound(spec) == expected
+
+
 def test_resolve_wildcard_npm_version_raises_when_no_matches(monkeypatch):
     monkeypatch.setattr(
         core_path.urllib.request,
