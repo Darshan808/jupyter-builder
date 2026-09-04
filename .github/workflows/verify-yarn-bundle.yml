@@ -9,10 +9,6 @@
         - '.github/workflows/verify-yarn-bundle.yml'
     push:
       branches: [main]
-    schedule:
-      # The bundled contents change across Yarn releases, so re-check on a
-      # schedule too: the report should not be able to rot between releases.
-      - cron: '17 5 * * 1'
     workflow_dispatch:
 
   env:
