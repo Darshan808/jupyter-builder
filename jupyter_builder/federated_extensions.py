@@ -33,7 +33,7 @@ else:
 from .commands import _test_overlap
 from .core_path import get_core_meta
 from .jlpm import _which_node_js
-from .jupyterlab_semver import clean, satisfies
+from .jupyterlab_semver import clean, make_range, make_semver
 
 DEPRECATED_ARGUMENT = object()
 
@@ -358,6 +358,19 @@ def _read_rspack_node_range(builder: str, ext_path: str) -> str:
     return _FALLBACK_NODE_RANGE
 
 
+def _satisfies_allowing_prerelease(current: str, node_range: str) -> bool:
+    """Return whether ``current`` satisfies ``node_range``, counting prereleases."""
+    try:
+        range_ = make_range(node_range, loose=True)  # type: ignore[no-untyped-call]
+        version = make_semver(current, loose=True)  # type: ignore[no-untyped-call]
+    except Exception:  # noqa: BLE001
+        return False
+    return any(
+        all(comparator.test(version) for comparator in comparator_set)
+        for comparator_set in range_.set
+    )
+
+
 def _check_node_version(
     builder: str,
     ext_path: str,
@@ -371,11 +384,11 @@ def _check_node_version(
     except (OSError, subprocess.CalledProcessError):
         return
     current = clean(raw, loose=True)  # type: ignore[no-untyped-call]
-    if current is None or satisfies(current, node_range, loose=True):  # type: ignore[no-untyped-call]
+    if current is None or _satisfies_allowing_prerelease(current, node_range):
         return
     msg = (
         f"Building this extension requires Node.js {node_range} (found {raw}). "
-        "Please upgrade Node.js."
+        "Please install a compatible Node.js version."
     )
     if logger:
         logger.error(msg)
