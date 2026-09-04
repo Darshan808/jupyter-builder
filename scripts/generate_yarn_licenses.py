@@ -5,11 +5,19 @@
 
 ``yarn.js`` is a prebuilt upstream artifact: Yarn Berry bundles itself with esbuild, so
 the ``JSONLicenseWebpackPlugin`` this project uses for webpack builds cannot see inside
-it. Instead this script reconstructs the report from the dependency tree the bundle was
-built from -- it checks out ``yarnpkg/berry`` at the tag matching the vendored bundle,
-installs the production dependencies of ``@yarnpkg/cli``, and walks ``node_modules``.
+it. Instead this script rebuilds the bundle from ``yarnpkg/berry`` at the tag matching
+the vendored copy, with esbuild's ``metafile`` turned on, and reports the packages the
+files listed in that metafile came from.
 
-Three artifacts are written from that one walk, so they cannot drift apart:
+The list esbuild produces is the bundle's own contents, which is not the same thing as
+the dependency closure of ``@yarnpkg/cli``, and the two differ in both directions.
+``@yarnpkg/pnp`` declares ``arg`` and ``resolve.exports`` as devDependencies while
+importing them from sources that are compiled in, so a closure walk misses code that
+ships. A closure also carries packages no bundle can contain: type-only ``@types/*``
+packages, ``tslib`` (esbuild inlines its own helpers rather than importing them), and
+dependencies that no source file imports at all.
+
+Three artifacts are written from that one file list, so they cannot drift apart:
 
 * ``THIRD_PARTY_LICENSES/yarn.js.third-party-licenses.json`` -- the machine-readable
   report. Its schema deliberately matches the one emitted by
@@ -20,13 +28,15 @@ Three artifacts are written from that one walk, so they cannot drift apart:
   as the union of every ``licenseId`` in the report plus the licenses of the parts of
   this project that are not inside ``yarn.js``.
 
-Note on accuracy: this slightly *over*-includes. esbuild tree-shakes the bundle, so a
-few packages listed here may not be fully inlined into ``yarn.js``.
-
 Usage::
 
     python scripts/generate_yarn_licenses.py 3.5.0
     python scripts/generate_yarn_licenses.py 3.5.0 --berry-checkout /path/to/berry
+    python scripts/generate_yarn_licenses.py 3.5.0 --berry-checkout berry --metafile out.json
+
+The last form reuses a metafile from a build that already happened, which is what CI
+does: ``.github/workflows/verify-yarn-bundle.yml`` rebuilds the bundle to compare its
+hash with the vendored copy, and that same build produces the file list.
 """
 
 from __future__ import annotations
@@ -39,17 +49,52 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable
 
 # The bundle vendored here is not a stock `@yarnpkg/cli` build: it additionally carries
 # the workspace-tools plugin, because `jlpm` exposes `yarn workspaces foreach`. This
 # mirrors the patch applied in .github/workflows/verify-yarn-bundle.yml, which verifies
 # the vendored bundle is byte-for-byte reproducible; the two must stay in step.
 EXTRA_BUNDLE_PLUGINS = ("@yarnpkg/plugin-workspace-tools",)
+
+# Berry 3.5.0 asks for `esbuild-wasm@^0.15.5`, and the version its lockfile resolves to
+# crashes on Node 18 and later. The workflow pins the same version for the same reason.
+ESBUILD_WASM_VERSION = "0.15.18"
+
+# The builder's esbuild call, and the two edits that make it write out the file list.
+# `metafile: true` does not change the bundle it emits, so the same build still serves
+# the byte-for-byte comparison the workflow makes.
+BUILDER_SOURCE = Path("packages/yarnpkg-builder/sources/commands/build/bundle.ts")
+BUILD_CALL_ANCHOR = "const res = await build({"
+MINIFY_ANCHOR = "minify: !this.noMinify,"
+# The loop appears twice, once per warning kind; the write goes in front of the first.
+WARNINGS_ANCHOR = "for (const warning of res.warnings) {"
+
+# Yarn maps every YARN_-prefixed variable onto a configuration key and aborts on the ones
+# it does not know, so the variable naming the metafile must not carry that prefix.
+METAFILE_ENV = "BUNDLE_METAFILE"
+METAFILE_WRITE = (
+    f"require('fs').writeFileSync(process.env.{METAFILE_ENV}, JSON.stringify(res.metafile));"
+)
+
+# An input inside a package taken from Yarn's cache. Both plain cache paths and the
+# `__virtual__/<hash>/<n>/` ones esbuild reports for virtual instances end in the same
+# `<archive>.zip/node_modules/<package>/` tail, so one pattern covers both. Matched
+# before WORKSPACE_INPUT, because a package may itself ship a `sources/` directory.
+CACHE_INPUT = re.compile(r"/(?P<archive>[^/]+\.zip)/node_modules/(?P<name>(?:@[^/]+/)?[^/]+)/")
+
+# An input inside one of Berry's own workspaces, reported either as
+# `../yarnpkg-core/sources/...` or as `.../1/packages/plugin-git/sources/...`.
+WORKSPACE_INPUT = re.compile(r"(?:^|/)(?:packages/)?(?P<dir>[A-Za-z0-9][A-Za-z0-9._-]*)/sources/")
+
+# esbuild reports the workspace it was pointed at with paths relative to it, so those
+# inputs carry no directory to match on.
+ENTRY_WORKSPACE = "yarnpkg-cli"
 
 # Filename prefixes that hold license text, checked case-insensitively.
 LICENSE_PREFIXES = ("LICENSE", "LICENCE", "COPYING")
@@ -135,11 +180,11 @@ def patch_cli_manifest(checkout: Path) -> None:
 def verify_checkout(checkout: Path, version: str) -> None:
     """Fail if a reused checkout cannot produce what a fresh clone would.
 
-    ``--berry-checkout`` skips both the clone and the manifest patch, so the tree is
+    ``--berry-checkout`` skips both the clone and the CLI manifest patch, so the tree is
     whatever the caller left there: it may sit at the wrong tag, or lack the extra
     plugins the vendored bundle carries. Either would quietly yield a report that does
-    not describe ``jupyter_builder/yarn.js``. Checked before installing, so a checkout
-    that cannot give a faithful answer fails in seconds rather than after a full install.
+    not describe ``jupyter_builder/yarn.js``. Checked before anything is built, so a
+    checkout that cannot give a faithful answer fails in seconds.
     """
     tag = berry_tag(version)
     try:
@@ -168,61 +213,69 @@ def verify_checkout(checkout: Path, version: str) -> None:
         raise RuntimeError(msg)
 
 
-def verify_installed_tree(checkout: Path) -> None:
-    """Fail if the installed tree lacks the extra plugins the vendored bundle carries.
+def patch_builder_manifest(checkout: Path) -> None:
+    """Pin the esbuild build the bundler runs on, so it works on current Node."""
+    manifest_path = checkout / "packages" / "yarnpkg-builder" / "package.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["dependencies"]["esbuild"] = f"npm:esbuild-wasm@{ESBUILD_WASM_VERSION}"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
-    A post-condition of the install for every path, not just reused checkouts: a stale
-    ``node_modules`` predating the manifest patch looks fine until you walk it.
+
+def patch_builder_metafile(checkout: Path) -> None:
+    """Make Berry's builder write esbuild's metafile to ``$BUNDLE_METAFILE``.
+
+    Also called from the workflow, so the build that checks the bundle's hash is the one
+    that produces the file list. Doing nothing when the patch is already applied keeps
+    that call safe to repeat.
     """
-    node_modules = checkout / "node_modules"
-    absent = [p for p in EXTRA_BUNDLE_PLUGINS if not (node_modules / p).is_dir()]
-    if absent:
-        msg = (
-            f"{node_modules} is missing {', '.join(absent)}; the report would understate "
-            f"the bundle. Delete node_modules and re-run to reinstall it"
-        )
-        raise RuntimeError(msg)
+    path = Path(checkout) / BUILDER_SOURCE
+    source = path.read_text(encoding="utf-8")
+    if METAFILE_WRITE in source:
+        return
+
+    for anchor, expected in ((BUILD_CALL_ANCHOR, 1), (MINIFY_ANCHOR, 1), (WARNINGS_ANCHOR, 2)):
+        if source.count(anchor) != expected:
+            msg = (
+                f"{path} has {source.count(anchor)} occurrences of {anchor!r}, expected "
+                f"{expected}; upstream changed the builder and this patch needs rewriting"
+            )
+            raise RuntimeError(msg)
+
+    source = source.replace(MINIFY_ANCHOR, f"{MINIFY_ANCHOR}\n          metafile: true,", 1)
+    source = source.replace(WARNINGS_ANCHOR, f"{METAFILE_WRITE}\n        {WARNINGS_ANCHOR}", 1)
+    path.write_text(source, encoding="utf-8")
 
 
-def install_production_deps(checkout: Path) -> None:
-    """Install only the production dependency tree of ``@yarnpkg/cli``.
-
-    Berry is a zero-install PnP repo, which has no ``node_modules`` to walk, so the
-    install is forced through the node-modules linker.
-    """
-    env = {
-        **os.environ,
-        "YARN_NODE_LINKER": "node-modules",
-        "YARN_ENABLE_IMMUTABLE_INSTALLS": "false",
-    }
+def yarn(checkout: Path, args: list[str], env: dict[str, str] | None = None) -> None:
+    """Run Berry's own Yarn inside a checkout, on the PnP linker it is set up for."""
     run(
-        ["node", "scripts/run-yarn.js", "workspaces", "focus", "@yarnpkg/cli", "--production"],
+        ["node", "scripts/run-yarn.js", *args],
         cwd=checkout,
-        env=env,
+        env={**os.environ, "YARN_NODE_LINKER": "pnp", **(env or {})},
     )
 
 
-def iter_package_dirs(node_modules: Path) -> Iterator[Path]:
-    """Yield every package directory in a ``node_modules`` tree.
+def install_build_deps(checkout: Path) -> None:
+    """Install what building the CLI bundle needs, and nothing more.
 
-    Handles ``@scope/`` directories, nested ``node_modules``, and the symlinks that the
-    node-modules linker creates for workspace packages.
+    Berry is a zero-install PnP repo. Focusing on the two workspaces the build touches
+    skips the rest of the monorepo, which otherwise compiles the website's native image
+    tooling for nothing.
     """
-    stack = [node_modules]
-    while stack:
-        current = stack.pop()
-        for entry in sorted(current.iterdir()):
-            # is_dir() follows symlinks, which is what we want for workspace links.
-            if entry.name == ".bin" or not entry.is_dir():
-                continue
-            if entry.name.startswith("@"):
-                stack.append(entry)
-                continue
-            if (entry / "package.json").is_file():
-                yield entry
-            nested = entry / "node_modules"
-            if nested.is_dir():
-                stack.append(nested)
+    yarn(
+        checkout,
+        ["workspaces", "focus", "@yarnpkg/cli", "@yarnpkg/builder"],
+        {"YARN_ENABLE_IMMUTABLE_INSTALLS": "false"},
+    )
+
+
+def build_bundle(checkout: Path, metafile: Path) -> None:
+    """Build the CLI bundle, writing esbuild's file list to ``metafile``."""
+    yarn(
+        checkout,
+        ["workspace", "@yarnpkg/cli", "run", "build:cli", "--no-git-hash"],
+        {METAFILE_ENV: str(metafile.resolve())},
+    )
 
 
 def license_id(manifest: dict[str, Any]) -> str:
@@ -240,54 +293,108 @@ def license_id(manifest: dict[str, Any]) -> str:
     return ""
 
 
-def license_text(package_dir: Path) -> str:
-    """Return the verbatim license text shipped in a package, or '' if there is none.
+def license_text(names: Iterable[str], read: Callable[[str], bytes]) -> str:
+    """Concatenate the license files among ``names``, or return '' if there are none.
 
-    A package may ship several license files (dual-licensed packages often do); all are
-    concatenated so no text is lost.
+    A package may ship several (dual-licensed ones often do), so none is dropped, and
+    the shortest name comes first, putting a plain LICENSE before LICENSE-MIT. Newlines
+    are normalised the way ``Path.read_text`` normalises them, so a package gives the
+    same bytes whether it is read from a directory or from a cache archive.
     """
-    candidates = [
-        entry
-        for entry in package_dir.iterdir()
-        if entry.is_file() and entry.name.upper().startswith(LICENSE_PREFIXES)
+    chosen = sorted(
+        (name for name in names if name.upper().startswith(LICENSE_PREFIXES)),
+        key=lambda name: (len(name), name),
+    )
+    texts = [
+        read(name)
+        .decode("utf-8", errors="replace")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .strip()
+        for name in chosen
     ]
-    # Shortest name first, so a plain LICENSE wins over LICENSE-MIT.
-    candidates.sort(key=lambda p: (len(p.name), p.name))
-    texts = [entry.read_text(encoding="utf-8", errors="replace").strip() for entry in candidates]
     return "\n\n".join(text for text in texts if text)
 
 
-def build_report(checkout: Path) -> tuple[dict[str, Any], list[str]]:
-    """Build the license report from an installed Berry checkout.
+def license_record(manifest: dict[str, Any], text: str) -> dict[str, str]:
+    """Build one report entry, in the schema ``JSONLicenseWebpackPlugin`` emits."""
+    return {
+        "name": manifest["name"],
+        "versionInfo": str(manifest.get("version", "")),
+        "licenseId": license_id(manifest),
+        "extractedText": text,
+    }
+
+
+def read_cached_package(archives: dict[str, Path], archive_name: str, name: str) -> dict[str, str]:
+    """Read one package's manifest and license text out of its cache archive."""
+    archive_path = archives.get(archive_name)
+    if archive_path is None:
+        msg = (
+            f"{archive_name} is named in the metafile but is not in the checkout's cache; "
+            f"the metafile and the checkout come from different installs"
+        )
+        raise RuntimeError(msg)
+
+    with zipfile.ZipFile(archive_path) as archive:
+        prefix = f"node_modules/{name}/"
+        root = [
+            member[len(prefix) :]
+            for member in archive.namelist()
+            if member.startswith(prefix) and "/" not in member[len(prefix) :]
+        ]
+        manifest = json.loads(archive.read(f"{prefix}package.json"))
+        return license_record(manifest, license_text(root, lambda m: archive.read(prefix + m)))
+
+
+def read_workspace(checkout: Path, directory: str, root_license: str) -> dict[str, str]:
+    """Read one Berry workspace's manifest and license text.
+
+    Most workspaces ship no license file and fall under the repository-root license, but
+    a few carry their own. ``plugin-patch`` keeps the notice for the patch-applying code
+    it derives from, and that notice is the one that has to be reproduced.
+    """
+    package_dir = checkout / "packages" / directory
+    manifest = json.loads((package_dir / "package.json").read_text(encoding="utf-8"))
+    names = [entry.name for entry in package_dir.iterdir() if entry.is_file()]
+    text = license_text(names, lambda name: (package_dir / name).read_bytes())
+    return license_record(manifest, text or root_license)
+
+
+def build_report(metafile: dict[str, Any], checkout: Path) -> tuple[dict[str, Any], list[str]]:
+    """Build the license report from the file list esbuild produced.
+
+    Every file esbuild resolved is counted, rather than only the ones it reports as
+    contributing bytes to the output. For this bundle the two sets are the same, and
+    where they could differ, naming a package that was dropped is the safer mistake.
 
     Returns the report and the list of ``name@version`` entries with no license text,
     so a human can review them.
     """
-    # Berry's own workspaces are symlinked into node_modules and carry no LICENSE file
-    # of their own; they are covered by the repository-root license.
+    archives = {path.name: path for path in (checkout / ".yarn" / "cache").glob("*.zip")}
     root_license = (checkout / "LICENSE.md").read_text(encoding="utf-8").strip()
 
     packages: dict[tuple[str, str], dict[str, str]] = {}
-    for package_dir in iter_package_dirs(checkout / "node_modules"):
-        manifest = json.loads((package_dir / "package.json").read_text(encoding="utf-8"))
-        name = manifest.get("name")
-        if not name:
-            continue
-        version = str(manifest.get("version", ""))
-        if (name, version) in packages:
-            continue
+    seen_cached: set[tuple[str, str]] = set()
+    seen_workspaces: set[str] = set()
 
-        text = license_text(package_dir)
-        if not text and "node_modules" not in package_dir.resolve().parts:
-            # A workspace package: falls under Berry's root license.
-            text = root_license
+    for path in metafile["inputs"]:
+        cached = CACHE_INPUT.search(path)
+        if cached:
+            key = (cached["archive"], cached["name"])
+            if key in seen_cached:
+                continue
+            seen_cached.add(key)
+            record = read_cached_package(archives, *key)
+        else:
+            workspace = WORKSPACE_INPUT.search(path)
+            directory = workspace["dir"] if workspace else ENTRY_WORKSPACE
+            if directory in seen_workspaces:
+                continue
+            seen_workspaces.add(directory)
+            record = read_workspace(checkout, directory, root_license)
 
-        packages[name, version] = {
-            "name": name,
-            "versionInfo": version,
-            "licenseId": license_id(manifest),
-            "extractedText": text,
-        }
+        packages.setdefault((record["name"], record["versionInfo"]), record)
 
     ordered = sorted(packages.values(), key=lambda p: (p["name"], p["versionInfo"]))
     missing = [f"{p['name']}@{p['versionInfo']}" for p in ordered if not p["extractedText"]]
@@ -401,6 +508,13 @@ def parse_args() -> argparse.Namespace:
         "it must sit at the matching tag and carry the bundle's extra plugins",
     )
     parser.add_argument(
+        "--metafile",
+        type=Path,
+        help="reuse the esbuild metafile from a build that already happened, instead of "
+        "building the bundle again; requires --berry-checkout to be the tree it was "
+        "built from",
+    )
+    parser.add_argument(
         "--json-output",
         type=Path,
         default=DEFAULT_JSON_OUTPUT,
@@ -418,7 +532,10 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_PYPROJECT,
         help=f"project metadata to update the SPDX expression in (default: {DEFAULT_PYPROJECT})",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.metafile and not args.berry_checkout:
+        parser.error("--metafile needs --berry-checkout, the tree the metafile was built from")
+    return args
 
 
 def main() -> int:
@@ -436,13 +553,20 @@ def main() -> int:
             clone_berry(args.version, checkout)
             patch_cli_manifest(checkout)
 
-        if not (checkout / "node_modules").is_dir():
-            install_production_deps(checkout)
+        metafile_path = args.metafile
+        if metafile_path is None:
+            # Everything the build needs, applied to whichever checkout we ended up with.
+            # The install runs every time rather than only when one is missing, so a tree
+            # left over from an earlier run cannot answer for a manifest it predates.
+            patch_builder_manifest(checkout)
+            patch_builder_metafile(checkout)
+            install_build_deps(checkout)
+            metafile_path = checkout / "metafile.json"
+            build_bundle(checkout, metafile_path)
 
-        verify_installed_tree(checkout)
-
+        metafile = json.loads(metafile_path.read_text(encoding="utf-8"))
         commit = capture(["git", "rev-parse", "HEAD"], cwd=checkout)
-        report, missing = build_report(checkout)
+        report, missing = build_report(metafile, checkout)
     finally:
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)

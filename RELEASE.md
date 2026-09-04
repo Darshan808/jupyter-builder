@@ -64,15 +64,17 @@ change:
    python scripts/generate_yarn_licenses.py <new-yarn-version>
    ```
 
-   This rewrites `THIRD_PARTY_LICENSES/yarn.js.third-party-licenses.json`,
-   `THIRD_PARTY_LICENSES/yarn.js.LICENSE.txt`, and the `license` SPDX expression in
-   `pyproject.toml`, all from one walk of the bundle's dependency tree.
+   This clones Berry at the matching tag, builds the bundle with esbuild's metafile
+   turned on, and rewrites `THIRD_PARTY_LICENSES/yarn.js.third-party-licenses.json`,
+   `THIRD_PARTY_LICENSES/yarn.js.LICENSE.txt` and the `license` SPDX expression in
+   `pyproject.toml` from the one file list esbuild produces. It needs `node` and
+   `git`, and takes about half a minute.
 
 Which packages Yarn bundles, and under which licenses, changes between Yarn
 releases, so skipping the regeneration leaves the distribution's license metadata
-wrong. The `Verify vendored yarn.js` workflow enforces this: it re-runs the
-generator and fails if the committed report differs from what the vendored bundle
-implies.
+wrong. The `Verify vendored yarn.js` workflow enforces this: the build it already
+runs to check the bundle's hash also emits the metafile, and the job then
+regenerates the report from it and fails if the committed one differs.
 
 ## Automated releases with the Jupyter Releaser
 

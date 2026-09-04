@@ -9,6 +9,7 @@ import { merge } from 'webpack-merge';
 import * as fs from 'fs-extra';
 import * as glob from 'glob';
 import Ajv from 'ajv';
+import { collectPluginIds } from './pluginMetadata';
 
 const baseConfig = require('./webpack.config.base');
 
@@ -186,7 +187,7 @@ function generateConfig({
 
   class CleanupPlugin {
     apply(compiler: rspack.Compiler): void {
-      compiler.hooks.done.tap('Cleanup', (stats: rspack.Stats) => {
+      compiler.hooks.done.tapPromise('Cleanup', async (stats: rspack.Stats) => {
         const newlyCreatedAssets = stats.compilation.assets;
 
         // Clear out any remoteEntry files that are stale
@@ -238,6 +239,7 @@ function generateConfig({
           extension?: string;
           mimeExtension?: string;
           style?: string;
+          plugins?: Record<string, string[]>;
         } = {
           // Joined with the posix separator because JupyterLab interpolates
           // this straight into the URL it fetches the entry point from, and an
@@ -253,6 +255,21 @@ function generateConfig({
         if (exposes['./style'] !== undefined) {
           _build.style = './style';
         }
+
+        // Record which plugins each module provides, so that JupyterLab can
+        // tell whether it has to load the module at all. A module whose ids
+        // could not be read is left out, and JupyterLab loads it as before.
+        const pluginModules: Record<string, string> = {};
+        for (const name of ['./extension', './mimeExtension']) {
+          if (exposes[name] !== undefined) {
+            pluginModules[name] = exposes[name];
+          }
+        }
+        const plugins = await collectPluginIds(pluginModules);
+        if (Object.keys(plugins).length > 0) {
+          _build.plugins = plugins;
+        }
+
         data.jupyterlab._build = _build;
         fs.writeJSONSync(path.join(outputPath, 'package.json'), data, {
           spaces: 2
