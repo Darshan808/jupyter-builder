@@ -907,7 +907,9 @@ def test_check_node_version_raises_on_old_node(tmp_path, monkeypatch):
         # A prerelease of the oldest supported version predates it, so it is not.
         ("22.12.0-alpha.1", False),
         ("20.19.0-alpha.1", False),
-        # Prereleases must not widen the range itself.
+        # Prereleases must not widen the range itself, including under an
+        # upper bound: 21.0.0-alpha.1 is <21.0.0, but 21.0.0 is excluded.
+        ("21.0.0-alpha.1", False),
         ("21.7.3-alpha.1", False),
         ("18.20.8-alpha.1", False),
         # Stable versions keep behaving as before.
