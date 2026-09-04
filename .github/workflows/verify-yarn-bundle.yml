@@ -4,10 +4,19 @@
     pull_request:
       paths:
         - 'jupyter_builder/yarn.js'
+        - 'THIRD_PARTY_LICENSES/**'
+        - 'scripts/generate_yarn_licenses.py'
         - '.github/workflows/verify-yarn-bundle.yml'
     push:
       branches: [main]
+    schedule:
+      # The bundled contents change across Yarn releases, so re-check on a
+      # schedule too: the report should not be able to rot between releases.
+      - cron: '17 5 * * 1'
     workflow_dispatch:
+
+  env:
+    NODE_VERSION: '24.11.1'
 
   jobs:
     rebuild-and-compare:
@@ -17,7 +26,6 @@
         # For reproducibility
         BERRY_TAG: '@yarnpkg/cli/3.5.0'
         ESBUILD_WASM_VERSION: '0.15.18'
-        NODE_VERSION: '24.11.1'
         YARN_NODE_LINKER: 'pnp'
 
       steps:
@@ -94,3 +102,47 @@
           with:
             name: rebuilt-yarn.js
             path: berry/packages/yarnpkg-cli/bundles/yarn.js
+
+    verify-license-report:
+      name: License report matches the vendored bundle
+      runs-on: ubuntu-latest
+
+      steps:
+        - uses: actions/checkout@v7
+
+        - uses: actions/setup-node@v7
+          with:
+            node-version: ${{ env.NODE_VERSION }}
+
+        - uses: actions/setup-python@v7
+          with:
+            python-version: '3.10'
+
+        # Read the version out of the bundle rather than hardcoding it, so that
+        # re-vendoring a different Yarn regenerates against that version. Run from
+        # outside the repo so no repo-local Yarn config can interfere.
+        - name: Read the bundled Yarn version
+          run: |
+            version=$(cd /tmp && node "$GITHUB_WORKSPACE/jupyter_builder/yarn.js" --version)
+            echo "Bundled Yarn: $version"
+            echo "YARN_VERSION=$version" >> "$GITHUB_ENV"
+
+        - name: Regenerate the license report
+          run: python scripts/generate_yarn_licenses.py "$YARN_VERSION"
+
+        - name: Fail if the committed report is stale
+          run: |
+            if ! git diff --exit-code -- THIRD_PARTY_LICENSES pyproject.toml; then
+              echo "::error::The committed license report does not match the vendored yarn.js."
+              echo "Run 'python scripts/generate_yarn_licenses.py $YARN_VERSION' and commit the result."
+              exit 1
+            fi
+
+        - name: Upload the regenerated report (for diffing on failure)
+          if: failure()
+          uses: actions/upload-artifact@v7
+          with:
+            name: regenerated-license-report
+            path: |
+              THIRD_PARTY_LICENSES/
+              pyproject.toml

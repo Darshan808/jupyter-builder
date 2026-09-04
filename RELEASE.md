@@ -49,6 +49,34 @@ npm login
 npm publish --access public
 ```
 
+## Updating the vendored Yarn bundle
+
+`jupyter_builder/yarn.js` is a prebuilt copy of the Yarn CLI, and its third-party
+license report is generated rather than hand-written. Vendoring a new bundle is
+therefore a three-part change:
+
+1. Replace `jupyter_builder/yarn.js`, and update `packageManager` in `package.json`
+   and `BERRY_TAG` in `.github/workflows/verify-yarn-bundle.yml` to match.
+
+1. Regenerate the license report and commit the result:
+
+   ```bash
+   python scripts/generate_yarn_licenses.py <new-yarn-version>
+   ```
+
+   This rewrites `THIRD_PARTY_LICENSES/yarn.js.third-party-licenses.json`,
+   `THIRD_PARTY_LICENSES/yarn.js.LICENSE.txt`, and the `license` SPDX expression in
+   `pyproject.toml`, all from one walk of the bundle's dependency tree.
+
+1. Review the packages the generator reports as shipping no license text, if the
+   list has changed.
+
+Which packages Yarn bundles, and under which licenses, changes between Yarn
+releases, so skipping the regeneration leaves the distribution's license metadata
+wrong. The `Verify vendored yarn.js` workflow enforces this: it re-runs the
+generator and fails if the committed report differs from what the vendored bundle
+implies.
+
 ## Automated releases with the Jupyter Releaser
 
 The extension repository should already be compatible with the Jupyter Releaser. But
