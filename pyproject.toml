@@ -9,8 +9,8 @@ build-backend = "hatchling.build"
 name = "jupyter_builder"
 description = "JupyterLab build tools"
 readme = "README.md"
-license = "BSD-2-Clause AND BSD-3-Clause AND ISC AND MIT"
-license-files = ["LICENSE", "THIRD_PARTY_LICENSES/*.txt"]
+license = "0BSD AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND ISC AND MIT AND Unlicense AND (MIT OR GPL-2.0-only)"
+license-files = ["LICENSE", "THIRD_PARTY_LICENSES/*.txt", "THIRD_PARTY_LICENSES/*.json"]
 requires-python = ">=3.10"
 authors = [
     { name = "Jupyter Development Team", email = "jupyter@googlegroups.com" },
