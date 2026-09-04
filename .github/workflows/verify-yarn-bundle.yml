@@ -6,6 +6,7 @@
         - 'jupyter_builder/yarn.js'
         - 'THIRD_PARTY_LICENSES/**'
         - 'scripts/generate_yarn_licenses.py'
+        - 'pyproject.toml'
         - '.github/workflows/verify-yarn-bundle.yml'
     push:
       branches: [main]

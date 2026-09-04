@@ -132,6 +132,58 @@ def patch_cli_manifest(checkout: Path) -> None:
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
+def verify_checkout(checkout: Path, version: str) -> None:
+    """Fail if a reused checkout cannot produce what a fresh clone would.
+
+    ``--berry-checkout`` skips both the clone and the manifest patch, so the tree is
+    whatever the caller left there: it may sit at the wrong tag, or lack the extra
+    plugins the vendored bundle carries. Either would quietly yield a report that does
+    not describe ``jupyter_builder/yarn.js``. Checked before installing, so a checkout
+    that cannot give a faithful answer fails in seconds rather than after a full install.
+    """
+    tag = berry_tag(version)
+    try:
+        expected = capture(["git", "rev-parse", f"{tag}^{{commit}}"], cwd=checkout)
+    except subprocess.CalledProcessError:
+        msg = f"{checkout} has no {tag} tag; fetch it, or drop --berry-checkout to clone"
+        raise RuntimeError(msg) from None
+
+    head = capture(["git", "rev-parse", "HEAD"], cwd=checkout)
+    if head != expected:
+        msg = (
+            f"{checkout} is at {head[:12]}, not {tag} ({expected[:12]}); "
+            f"check out the tag, or drop --berry-checkout to clone"
+        )
+        raise RuntimeError(msg)
+
+    manifest_path = checkout / "packages" / "yarnpkg-cli" / "package.json"
+    dependencies = json.loads(manifest_path.read_text(encoding="utf-8"))["dependencies"]
+    absent = [p for p in EXTRA_BUNDLE_PLUGINS if p not in dependencies]
+    if absent:
+        msg = (
+            f"{manifest_path} does not depend on {', '.join(absent)}, which the vendored "
+            f"bundle carries, so the report would understate it. Apply the same patch "
+            f"patch_cli_manifest() makes, or drop --berry-checkout to clone"
+        )
+        raise RuntimeError(msg)
+
+
+def verify_installed_tree(checkout: Path) -> None:
+    """Fail if the installed tree lacks the extra plugins the vendored bundle carries.
+
+    A post-condition of the install for every path, not just reused checkouts: a stale
+    ``node_modules`` predating the manifest patch looks fine until you walk it.
+    """
+    node_modules = checkout / "node_modules"
+    absent = [p for p in EXTRA_BUNDLE_PLUGINS if not (node_modules / p).is_dir()]
+    if absent:
+        msg = (
+            f"{node_modules} is missing {', '.join(absent)}; the report would understate "
+            f"the bundle. Delete node_modules and re-run to reinstall it"
+        )
+        raise RuntimeError(msg)
+
+
 def install_production_deps(checkout: Path) -> None:
     """Install only the production dependency tree of ``@yarnpkg/cli``.
 
@@ -345,7 +397,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--berry-checkout",
         type=Path,
-        help="reuse an existing Berry checkout at this path instead of cloning",
+        help="reuse an existing Berry checkout at this path instead of cloning; "
+        "it must sit at the matching tag and carry the bundle's extra plugins",
     )
     parser.add_argument(
         "--json-output",
@@ -376,6 +429,7 @@ def main() -> int:
     try:
         if args.berry_checkout:
             checkout = args.berry_checkout
+            verify_checkout(checkout, args.version)
         else:
             temp_dir = tempfile.mkdtemp(prefix="berry-licenses-")
             checkout = Path(temp_dir) / "berry"
@@ -384,6 +438,8 @@ def main() -> int:
 
         if not (checkout / "node_modules").is_dir():
             install_production_deps(checkout)
+
+        verify_installed_tree(checkout)
 
         commit = capture(["git", "rev-parse", "HEAD"], cwd=checkout)
         report, missing = build_report(checkout)
