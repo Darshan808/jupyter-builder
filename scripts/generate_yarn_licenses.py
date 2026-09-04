@@ -13,21 +13,15 @@ Three artifacts are written from that one walk, so they cannot drift apart:
 
 * ``THIRD_PARTY_LICENSES/yarn.js.third-party-licenses.json`` -- the machine-readable
   report. Its schema deliberately matches the one emitted by
-  ``JSONLicenseWebpackPlugin`` (see ``src/webpack-plugins.ts``) so downstream consumers
-  can treat this report and JupyterLab's ``third-party-licenses.json`` identically::
+  ``JSONLicenseWebpackPlugin``
 
-      {"packages": [{"name", "versionInfo", "licenseId", "extractedText"}]}
-
-* ``THIRD_PARTY_LICENSES/yarn.js.LICENSE.txt`` -- the same data rendered for humans.
+* ``THIRD_PARTY_LICENSES/yarn.js.LICENSE.txt`` -- the same data rendered in text form.
 * the ``license`` field in ``pyproject.toml`` -- the aggregate SPDX expression, computed
   as the union of every ``licenseId`` in the report plus the licenses of the parts of
   this project that are not inside ``yarn.js``.
 
 Note on accuracy: this slightly *over*-includes. esbuild tree-shakes the bundle, so a
-few packages listed here may not be fully inlined into ``yarn.js``. That is deliberate
-and safe -- for both the aggregate SPDX license expression and for Fedora-style
-``Provides: bundled(npm(...))`` CVE tracking, listing a package that turned out not to
-be shipped is harmless, while omitting one that was is not.
+few packages listed here may not be fully inlined into ``yarn.js``.
 
 Usage::
 
