@@ -10,11 +10,6 @@ node-semver Python port by podhmo.
     Source file:         semver/__init__.py
     SPDX identifier:     MIT
 
-That commit is not a tagged release: `git describe` reports 0.2.0-3-gb42e989,
-i.e. three commits after tag 0.2.0, and it was first released in 0.3.0.
-The vendored copy is also not verbatim -- it reached this project by way of
-JupyterLab and carries modifications relative to upstream.
-
 The same MIT license text is reproduced at the top of jupyterlab_semver.py.
 
 ---
